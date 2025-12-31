@@ -63,9 +63,9 @@ from opentelemetry.instrumentation.langchain.event_models import (
     ToolCall,
 )
 from opentelemetry.instrumentation.langchain.semconv import (
+    GenAISpanKindValues,
     LLMRequestTypeValues,
     SpanAttributes,
-    TraceloopSpanKindValues,
 )
 from opentelemetry.instrumentation.langchain.span_utils import (
     SpanHolder,
@@ -295,9 +295,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
         token = self._safe_attach_context(span)
 
         _set_span_attribute(
-            span, SpanAttributes.TRACELOOP_WORKFLOW_NAME, workflow_name
+            span, SpanAttributes.LANGCHAIN_WORKFLOW_NAME, workflow_name
         )
-        _set_span_attribute(span, SpanAttributes.TRACELOOP_ENTITY_PATH, entity_path)
+        _set_span_attribute(span, SpanAttributes.LANGCHAIN_ENTITY_PATH, entity_path)
 
         if metadata is not None:
             for key, value in sanitized_metadata.items():
@@ -327,7 +327,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
         run_id: UUID,
         parent_run_id: Optional[UUID],
         name: str,
-        kind: TraceloopSpanKindValues,
+        kind: GenAISpanKindValues,
         workflow_name: str,
         entity_name: str = "",
         entity_path: str = "",
@@ -345,8 +345,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
             metadata=metadata,
         )
 
-        _set_span_attribute(span, SpanAttributes.TRACELOOP_SPAN_KIND, kind.value)
-        _set_span_attribute(span, SpanAttributes.TRACELOOP_ENTITY_NAME, entity_name)
+        _set_span_attribute(span, GenAIAttributes.GEN_AI_OPERATION_NAME, kind.value)
+        _set_span_attribute(span, SpanAttributes.LANGCHAIN_ENTITY_NAME, entity_name)
 
         return span
 
@@ -379,7 +379,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
 
         _set_span_attribute(span, GenAIAttributes.GEN_AI_SYSTEM, vendor)
         _set_span_attribute(
-            span, SpanAttributes.LLM_REQUEST_TYPE, request_type.value
+            span, GenAIAttributes.GEN_AI_OPERATION_NAME, request_type.value
         )
 
         try:
@@ -421,12 +421,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
 
         name = self._get_name_from_callback(serialized, **kwargs)
         kind = (
-            TraceloopSpanKindValues.WORKFLOW
+            GenAISpanKindValues.WORKFLOW
             if parent_run_id is None or parent_run_id not in self.spans
-            else TraceloopSpanKindValues.TASK
+            else GenAISpanKindValues.TASK
         )
 
-        if kind == TraceloopSpanKindValues.WORKFLOW:
+        if kind == GenAISpanKindValues.WORKFLOW:
             workflow_name = name
             entity_path = ""
         else:
@@ -446,7 +446,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
 
         if not should_emit_events() and should_send_prompts():
             span.set_attribute(
-                SpanAttributes.TRACELOOP_ENTITY_INPUT,
+                "gen_ai.langchain.entity.input",
                 json.dumps(
                     {
                         "inputs": inputs,
@@ -479,7 +479,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
 
         if not should_emit_events() and should_send_prompts():
             span.set_attribute(
-                SpanAttributes.TRACELOOP_ENTITY_OUTPUT,
+                "gen_ai.langchain.entity.output",
                 json.dumps(
                     {"outputs": outputs, "kwargs": kwargs},
                     cls=CallbackFilteredJSONEncoder,
@@ -718,7 +718,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
             run_id,
             parent_run_id,
             name,
-            TraceloopSpanKindValues.TOOL,
+            GenAISpanKindValues.TOOL,
             workflow_name,
             name,
             entity_path,
@@ -726,7 +726,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
 
         if not should_emit_events() and should_send_prompts():
             span.set_attribute(
-                SpanAttributes.TRACELOOP_ENTITY_INPUT,
+                "gen_ai.langchain.entity.input",
                 json.dumps(
                     {
                         "input_str": input_str,
@@ -758,7 +758,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
         span = self._get_span(run_id)
         if not should_emit_events() and should_send_prompts():
             span.set_attribute(
-                SpanAttributes.TRACELOOP_ENTITY_OUTPUT,
+                "gen_ai.langchain.entity.output",
                 json.dumps(
                     {"output": output, "kwargs": kwargs},
                     cls=CallbackFilteredJSONEncoder,
@@ -959,8 +959,3 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):  # type: ignor
                     finish_reason=finish_reason,
                 )
             )
-
-
-# Keep the SpanAttributes constants for additional entity attributes
-SpanAttributes.TRACELOOP_ENTITY_INPUT = "traceloop.entity.input"
-SpanAttributes.TRACELOOP_ENTITY_OUTPUT = "traceloop.entity.output"

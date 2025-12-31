@@ -18,29 +18,44 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 from contextlib import contextmanager
 from typing import Any, AsyncIterator, Callable, Generator, Iterator, TypeVar
 
+from opentelemetry.metrics import Histogram
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+)
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
-# Custom semantic attributes for LangGraph
-LANGGRAPH_GRAPH_NAME = "langgraph.graph.name"
-LANGGRAPH_GRAPH_ID = "langgraph.graph.id"
-LANGGRAPH_NODE_NAME = "langgraph.node.name"
-LANGGRAPH_STEP = "langgraph.step"
+# Custom semantic attributes for LangGraph (following gen_ai.* namespace)
+LANGGRAPH_GRAPH_NAME = "gen_ai.langgraph.graph.name"
+LANGGRAPH_GRAPH_ID = "gen_ai.langgraph.graph.id"
+LANGGRAPH_NODE_NAME = "gen_ai.langgraph.node.name"
+LANGGRAPH_STEP = "gen_ai.langgraph.step"
 
 # Tool-related semantic attributes
-LANGGRAPH_TOOL_NAME = "langgraph.tool.name"
-LANGGRAPH_TOOL_CALL_ID = "langgraph.tool.call_id"
-LANGGRAPH_TOOL_COUNT = "langgraph.tool.count"
-LANGGRAPH_TOOL_INPUT = "langgraph.tool.input"
-LANGGRAPH_TOOL_OUTPUT = "langgraph.tool.output"
+LANGGRAPH_TOOL_NAME = "gen_ai.langgraph.tool.name"
+LANGGRAPH_TOOL_CALL_ID = "gen_ai.langgraph.tool.call_id"
+LANGGRAPH_TOOL_COUNT = "gen_ai.langgraph.tool.count"
+LANGGRAPH_TOOL_INPUT = "gen_ai.langgraph.tool.input"
+LANGGRAPH_TOOL_OUTPUT = "gen_ai.langgraph.tool.output"
 
-# Traceloop semantic attributes (for compatibility with LangChain instrumentation)
-TRACELOOP_SPAN_KIND = "traceloop.span.kind"
-GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+# Stream-related semantic attributes
+LANGGRAPH_STREAM_MODE = "gen_ai.langgraph.stream.mode"
+
+# Batch-related semantic attributes
+LANGGRAPH_BATCH_SIZE = "gen_ai.langgraph.batch.size"
+
+# Agent-related semantic attributes
+LANGGRAPH_AGENT_MODEL = "gen_ai.langgraph.agent.model"
+LANGGRAPH_AGENT_TOOLS_COUNT = "gen_ai.langgraph.agent.tools_count"
+LANGGRAPH_AGENT_HAS_CHECKPOINTER = "gen_ai.langgraph.agent.has_checkpointer"
+
+# State operation semantic attributes
+LANGGRAPH_STATE_OPERATION = "gen_ai.langgraph.state.operation"
 
 logger = logging.getLogger(__name__)
 
@@ -145,11 +160,15 @@ def _workflow_span(
             raise
 
 
-def create_invoke_wrapper(tracer: Tracer) -> Callable[..., Any]:
+def create_invoke_wrapper(
+    tracer: Tracer,
+    duration_histogram: Histogram | None = None,
+) -> Callable[..., Any]:
     """Create wrapper for Pregel.invoke.
 
     Args:
         tracer: The OpenTelemetry tracer.
+        duration_histogram: Optional histogram for recording duration.
 
     Returns:
         The wrapper function.
@@ -163,19 +182,36 @@ def create_invoke_wrapper(tracer: Tracer) -> Callable[..., Any]:
         kwargs: dict[str, Any],
     ) -> Any:
         input_data = args[0] if args else kwargs.get("input")
+        start_time = time.perf_counter()
 
-        with _workflow_span(tracer, instance, input_data):
-            result = wrapped(*args, **kwargs)
-            return result
+        try:
+            with _workflow_span(tracer, instance, input_data):
+                result = wrapped(*args, **kwargs)
+                return result
+        finally:
+            if duration_histogram is not None:
+                duration = time.perf_counter() - start_time
+                graph_name = _get_graph_name(instance)
+                duration_histogram.record(
+                    duration,
+                    attributes={
+                        LANGGRAPH_GRAPH_NAME: graph_name,
+                        "operation": "invoke",
+                    },
+                )
 
     return wrapper
 
 
-def create_ainvoke_wrapper(tracer: Tracer) -> Callable[..., Any]:
+def create_ainvoke_wrapper(
+    tracer: Tracer,
+    duration_histogram: Histogram | None = None,
+) -> Callable[..., Any]:
     """Create wrapper for Pregel.ainvoke.
 
     Args:
         tracer: The OpenTelemetry tracer.
+        duration_histogram: Optional histogram for recording duration.
 
     Returns:
         The async wrapper function.
@@ -190,6 +226,7 @@ def create_ainvoke_wrapper(tracer: Tracer) -> Callable[..., Any]:
         input_data = args[0] if args else kwargs.get("input")
         graph_name = _get_graph_name(instance)
         graph_id = _get_graph_id(instance)
+        start_time = time.perf_counter()
 
         with tracer.start_as_current_span(
             name=f"langgraph.workflow {graph_name}",
@@ -207,6 +244,16 @@ def create_ainvoke_wrapper(tracer: Tracer) -> Callable[..., Any]:
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.record_exception(e)
                 raise
+            finally:
+                if duration_histogram is not None:
+                    duration = time.perf_counter() - start_time
+                    duration_histogram.record(
+                        duration,
+                        attributes={
+                            LANGGRAPH_GRAPH_NAME: graph_name,
+                            "operation": "ainvoke",
+                        },
+                    )
 
     return wrapper
 
@@ -220,11 +267,13 @@ class _StreamWrapper:
         span: Any,
         tracer: Tracer,
         graph_name: str,
+        stream_mode: str | None = None,
     ) -> None:
         self._stream = stream
         self._span = span
         self._tracer = tracer
         self._graph_name = graph_name
+        self._stream_mode = stream_mode
         self._step = 0
 
     def __iter__(self) -> "_StreamWrapper":
@@ -236,10 +285,12 @@ class _StreamWrapper:
             self._step += 1
             return chunk
         except StopIteration:
+            self._span.set_attribute(LANGGRAPH_STEP, self._step)
             self._span.set_status(Status(StatusCode.OK))
             self._span.end()
             raise
         except Exception as e:
+            self._span.set_attribute(LANGGRAPH_STEP, self._step)
             self._span.set_status(Status(StatusCode.ERROR, str(e)))
             self._span.record_exception(e)
             self._span.end()
@@ -255,11 +306,13 @@ class _AsyncStreamWrapper:
         span: Any,
         tracer: Tracer,
         graph_name: str,
+        stream_mode: str | None = None,
     ) -> None:
         self._stream = stream
         self._span = span
         self._tracer = tracer
         self._graph_name = graph_name
+        self._stream_mode = stream_mode
         self._step = 0
 
     def __aiter__(self) -> "_AsyncStreamWrapper":
@@ -271,14 +324,43 @@ class _AsyncStreamWrapper:
             self._step += 1
             return chunk
         except StopAsyncIteration:
+            self._span.set_attribute(LANGGRAPH_STEP, self._step)
             self._span.set_status(Status(StatusCode.OK))
             self._span.end()
             raise
         except Exception as e:
+            self._span.set_attribute(LANGGRAPH_STEP, self._step)
             self._span.set_status(Status(StatusCode.ERROR, str(e)))
             self._span.record_exception(e)
             self._span.end()
             raise
+
+
+def _get_stream_mode(kwargs: dict[str, Any]) -> str:
+    """Extract and normalize stream_mode from kwargs.
+
+    Args:
+        kwargs: The keyword arguments passed to stream/astream.
+
+    Returns:
+        A string representation of the stream mode(s).
+    """
+    stream_mode_raw = kwargs.get("stream_mode", "values")
+    if stream_mode_raw is None:
+        return "values"
+    if isinstance(stream_mode_raw, str):
+        return stream_mode_raw
+    # Handle list or tuple of stream modes
+    try:
+        if hasattr(stream_mode_raw, "__iter__"):
+            modes: list[str] = []
+            iterable: Any = stream_mode_raw
+            for item in iterable:
+                modes.append(str(item))
+            return ",".join(modes)
+    except (TypeError, AttributeError):
+        pass
+    return str(stream_mode_raw)
 
 
 def create_stream_wrapper(tracer: Tracer) -> Callable[..., Any]:
@@ -300,6 +382,9 @@ def create_stream_wrapper(tracer: Tracer) -> Callable[..., Any]:
     ) -> Any:
         graph_name = _get_graph_name(instance)
         graph_id = _get_graph_id(instance)
+        # Capture stream_mode (new in LangGraph - values, updates, messages,
+        # checkpoints, tasks, debug)
+        stream_mode = _get_stream_mode(kwargs)
 
         span = tracer.start_span(
             name=f"langgraph.workflow.stream {graph_name}",
@@ -308,10 +393,14 @@ def create_stream_wrapper(tracer: Tracer) -> Callable[..., Any]:
         span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
         if graph_id:
             span.set_attribute(LANGGRAPH_GRAPH_ID, graph_id)
+        if stream_mode:
+            span.set_attribute(LANGGRAPH_STREAM_MODE, str(stream_mode))
 
         try:
             stream = wrapped(*args, **kwargs)
-            return _StreamWrapper(stream, span, tracer, graph_name)
+            return _StreamWrapper(
+                stream, span, tracer, graph_name, str(stream_mode)
+            )
         except Exception as e:
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
@@ -339,6 +428,9 @@ def create_astream_wrapper(tracer: Tracer) -> Callable[..., Any]:
     ) -> Any:
         graph_name = _get_graph_name(instance)
         graph_id = _get_graph_id(instance)
+        # Capture stream_mode (new in LangGraph - values, updates, messages,
+        # checkpoints, tasks, debug)
+        stream_mode = _get_stream_mode(kwargs)
 
         span = tracer.start_span(
             name=f"langgraph.workflow.stream {graph_name}",
@@ -347,10 +439,14 @@ def create_astream_wrapper(tracer: Tracer) -> Callable[..., Any]:
         span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
         if graph_id:
             span.set_attribute(LANGGRAPH_GRAPH_ID, graph_id)
+        if stream_mode:
+            span.set_attribute(LANGGRAPH_STREAM_MODE, stream_mode)
 
         try:
             stream = await wrapped(*args, **kwargs)
-            return _AsyncStreamWrapper(stream, span, tracer, graph_name)
+            return _AsyncStreamWrapper(
+                stream, span, tracer, graph_name, stream_mode
+            )
         except Exception as e:
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
@@ -463,7 +559,7 @@ def create_tool_node_wrapper(tracer: Tracer) -> Callable[..., Any]:
         ) as node_span:
             node_span.set_attribute(LANGGRAPH_NODE_NAME, "tools")
             node_span.set_attribute(LANGGRAPH_TOOL_COUNT, len(tool_calls))
-            node_span.set_attribute(TRACELOOP_SPAN_KIND, "task")
+            node_span.set_attribute(GenAIAttributes.GEN_AI_OPERATION_NAME, "task")
 
             try:
                 # Execute the original function
@@ -523,7 +619,7 @@ def create_async_tool_node_wrapper(tracer: Tracer) -> Callable[..., Any]:
         ) as node_span:
             node_span.set_attribute(LANGGRAPH_NODE_NAME, "tools")
             node_span.set_attribute(LANGGRAPH_TOOL_COUNT, len(tool_calls))
-            node_span.set_attribute(TRACELOOP_SPAN_KIND, "task")
+            node_span.set_attribute(GenAIAttributes.GEN_AI_OPERATION_NAME, "task")
 
             try:
                 # Execute the original function
@@ -608,8 +704,7 @@ def _record_tool_spans(
             kind=SpanKind.INTERNAL,
         ) as tool_span:
             tool_span.set_attribute(LANGGRAPH_TOOL_NAME, tool_name)
-            tool_span.set_attribute(TRACELOOP_SPAN_KIND, "tool")
-            tool_span.set_attribute(GEN_AI_OPERATION_NAME, "execute_tool")
+            tool_span.set_attribute(GenAIAttributes.GEN_AI_OPERATION_NAME, "execute_tool")
 
             if tool_call_id:
                 tool_span.set_attribute(LANGGRAPH_TOOL_CALL_ID, tool_call_id)
@@ -627,3 +722,310 @@ def _record_tool_spans(
                 )
 
             tool_span.set_status(Status(StatusCode.OK))
+
+
+def create_batch_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for Pregel.batch.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The wrapper function.
+    """
+
+    @_dont_throw
+    def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+        graph_id = _get_graph_id(instance)
+        # Get batch size from first argument (list of inputs)
+        inputs = args[0] if args else kwargs.get("inputs", [])
+        batch_size = len(inputs) if hasattr(inputs, "__len__") else 0
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.workflow.batch {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            if graph_id:
+                span.set_attribute(LANGGRAPH_GRAPH_ID, graph_id)
+            span.set_attribute(LANGGRAPH_BATCH_SIZE, batch_size)
+
+            try:
+                result = wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def create_abatch_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for Pregel.abatch.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The async wrapper function.
+    """
+
+    async def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+        graph_id = _get_graph_id(instance)
+        # Get batch size from first argument (list of inputs)
+        inputs = args[0] if args else kwargs.get("inputs", [])
+        batch_size = len(inputs) if hasattr(inputs, "__len__") else 0
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.workflow.batch {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            if graph_id:
+                span.set_attribute(LANGGRAPH_GRAPH_ID, graph_id)
+            span.set_attribute(LANGGRAPH_BATCH_SIZE, batch_size)
+
+            try:
+                result = await wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def create_get_state_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for CompiledGraph.get_state.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The wrapper function.
+    """
+
+    @_dont_throw
+    def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.state.get {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            span.set_attribute(LANGGRAPH_STATE_OPERATION, "get_state")
+
+            try:
+                result = wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def create_aget_state_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for CompiledGraph.aget_state.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The async wrapper function.
+    """
+
+    async def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.state.get {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            span.set_attribute(LANGGRAPH_STATE_OPERATION, "aget_state")
+
+            try:
+                result = await wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def create_update_state_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for CompiledGraph.update_state.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The wrapper function.
+    """
+
+    @_dont_throw
+    def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.state.update {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            span.set_attribute(LANGGRAPH_STATE_OPERATION, "update_state")
+
+            try:
+                result = wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def create_aupdate_state_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for CompiledGraph.aupdate_state.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The async wrapper function.
+    """
+
+    async def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        graph_name = _get_graph_name(instance)
+
+        with tracer.start_as_current_span(
+            name=f"langgraph.state.update {graph_name}",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_GRAPH_NAME, graph_name)
+            span.set_attribute(LANGGRAPH_STATE_OPERATION, "aupdate_state")
+
+            try:
+                result = await wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper
+
+
+def _get_model_name(model: Any) -> str:
+    """Extract model name from a model object.
+
+    Args:
+        model: The model object (can be string, ChatModel, or callable).
+
+    Returns:
+        The model name or "unknown".
+    """
+    if isinstance(model, str):
+        return model
+    if hasattr(model, "model_name"):
+        return str(model.model_name)
+    if hasattr(model, "model"):
+        return str(model.model)
+    if hasattr(model, "__class__"):
+        return model.__class__.__name__
+    return "unknown"
+
+
+def create_react_agent_wrapper(tracer: Tracer) -> Callable[..., Any]:
+    """Create wrapper for create_react_agent function.
+
+    This wraps both langgraph.prebuilt.create_react_agent and
+    langchain.agents.create_agent to capture agent creation telemetry.
+
+    Args:
+        tracer: The OpenTelemetry tracer.
+
+    Returns:
+        The wrapper function.
+    """
+
+    @_dont_throw
+    def wrapper(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        # Extract agent configuration
+        model = args[0] if args else kwargs.get("model")
+        tools = args[1] if len(args) > 1 else kwargs.get("tools", [])
+        checkpointer = kwargs.get("checkpointer")
+
+        model_name = _get_model_name(model)
+        tools_count = len(tools) if hasattr(tools, "__len__") else 0
+        has_checkpointer = checkpointer is not None
+
+        with tracer.start_as_current_span(
+            name="langgraph.create_react_agent",
+            kind=SpanKind.INTERNAL,
+        ) as span:
+            span.set_attribute(LANGGRAPH_AGENT_MODEL, model_name)
+            span.set_attribute(LANGGRAPH_AGENT_TOOLS_COUNT, tools_count)
+            span.set_attribute(LANGGRAPH_AGENT_HAS_CHECKPOINTER, has_checkpointer)
+            span.set_attribute(GenAIAttributes.GEN_AI_OPERATION_NAME, "create_agent")
+
+            try:
+                result = wrapped(*args, **kwargs)
+                span.set_status(Status(StatusCode.OK))
+                return result
+            except Exception as e:
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.record_exception(e)
+                raise
+
+    return wrapper

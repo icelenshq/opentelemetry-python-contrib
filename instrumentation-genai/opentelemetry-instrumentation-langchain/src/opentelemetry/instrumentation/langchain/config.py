@@ -32,4 +32,4 @@ class Config:
     exception_logger: Optional[Callable[[Exception], None]] = None
     use_legacy_attributes: bool = True
     event_logger: Optional[Logger] = None
-    metadata_key_prefix: str = "traceloop.association.properties"
+    metadata_key_prefix: str = "gen_ai.langchain.metadata"

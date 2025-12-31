@@ -36,9 +36,9 @@ from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
 
 from opentelemetry.instrumentation.langchain.semconv import (
+    GenAISpanKindValues,
     LLMRequestTypeValues,
     SpanAttributes,
-    TraceloopSpanKindValues,
 )
 from opentelemetry.instrumentation.langchain.utils import (
     CallbackFilteredJSONEncoder,
@@ -106,7 +106,7 @@ class SpanManager:
         parent_run_id: Optional[UUID],
         span_name: str,
         kind: SpanKind = SpanKind.INTERNAL,
-        span_kind_value: TraceloopSpanKindValues = TraceloopSpanKindValues.TASK,
+        span_kind_value: GenAISpanKindValues = GenAISpanKindValues.TASK,
         entity_name: str = "",
         workflow_name: str = "",
     ) -> SpanHolder:
@@ -117,7 +117,7 @@ class SpanManager:
             parent_run_id: Parent run ID, if any.
             span_name: Name for the span.
             kind: OpenTelemetry span kind.
-            span_kind_value: Traceloop span kind value.
+            span_kind_value: GenAI operation name value.
             entity_name: Name of the entity.
             workflow_name: Name of the workflow.
 
@@ -145,19 +145,19 @@ class SpanManager:
         # Set common attributes
         if span.is_recording():
             span.set_attribute(
-                SpanAttributes.TRACELOOP_SPAN_KIND, span_kind_value.value
+                GenAIAttributes.GEN_AI_OPERATION_NAME, span_kind_value.value
             )
             if entity_name:
                 span.set_attribute(
-                    SpanAttributes.TRACELOOP_ENTITY_NAME, entity_name
+                    SpanAttributes.LANGCHAIN_ENTITY_NAME, entity_name
                 )
             if entity_path:
                 span.set_attribute(
-                    SpanAttributes.TRACELOOP_ENTITY_PATH, entity_path
+                    SpanAttributes.LANGCHAIN_ENTITY_PATH, entity_path
                 )
             if workflow_name:
                 span.set_attribute(
-                    SpanAttributes.TRACELOOP_WORKFLOW_NAME, workflow_name
+                    SpanAttributes.LANGCHAIN_WORKFLOW_NAME, workflow_name
                 )
 
         context = set_span_in_context(span)
@@ -197,7 +197,7 @@ class SpanManager:
             parent_run_id=parent_run_id,
             span_name=f"chat {request_model}",
             kind=SpanKind.CLIENT,
-            span_kind_value=TraceloopSpanKindValues.TASK,
+            span_kind_value=GenAISpanKindValues.CHAT,
             entity_name=request_model,
         )
 
@@ -209,9 +209,6 @@ class SpanManager:
             )
             span.set_attribute(GenAIAttributes.GEN_AI_REQUEST_MODEL, request_model)
             span.set_attribute(GenAIAttributes.GEN_AI_SYSTEM, vendor)
-            span.set_attribute(
-                SpanAttributes.LLM_REQUEST_TYPE, LLMRequestTypeValues.CHAT.value
-            )
 
         holder.request_model = request_model
         return holder
@@ -221,7 +218,7 @@ class SpanManager:
         run_id: UUID,
         parent_run_id: Optional[UUID],
         chain_name: str,
-        span_kind_value: TraceloopSpanKindValues = TraceloopSpanKindValues.TASK,
+        span_kind_value: GenAISpanKindValues = GenAISpanKindValues.TASK,
     ) -> SpanHolder:
         """Create a span for a chain execution.
 
@@ -229,13 +226,13 @@ class SpanManager:
             run_id: Unique identifier for this run.
             parent_run_id: Parent run ID, if any.
             chain_name: Name of the chain.
-            span_kind_value: The span kind value (workflow or task).
+            span_kind_value: The operation name value (workflow or task).
 
         Returns:
             SpanHolder containing the created span.
         """
         span_name = f"{chain_name}.{span_kind_value.value}"
-        workflow_name = chain_name if span_kind_value == TraceloopSpanKindValues.WORKFLOW else ""
+        workflow_name = chain_name if span_kind_value == GenAISpanKindValues.WORKFLOW else ""
 
         return self.create_span(
             run_id=run_id,
@@ -268,7 +265,7 @@ class SpanManager:
             parent_run_id=parent_run_id,
             span_name=f"{tool_name}.tool",
             kind=SpanKind.INTERNAL,
-            span_kind_value=TraceloopSpanKindValues.TOOL,
+            span_kind_value=GenAISpanKindValues.TOOL,
             entity_name=tool_name,
         )
 

@@ -30,7 +30,9 @@ from opentelemetry._logs import Logger
 
 from opentelemetry.instrumentation.langchain.config import Config
 
-TRACELOOP_TRACE_CONTENT = "TRACELOOP_TRACE_CONTENT"
+OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = (
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -74,7 +76,7 @@ def should_send_prompts() -> bool:
     Returns:
         True if content tracing is enabled via environment variable or context.
     """
-    env_value = os.getenv(TRACELOOP_TRACE_CONTENT, "true")
+    env_value = os.getenv(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "false")
     return env_value.lower() == "true" or bool(
         context_api.get_value("override_enable_content_tracing")
     )

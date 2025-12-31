@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Local semantic conventions for LangChain instrumentation.
+"""Semantic conventions for LangChain instrumentation.
 
-These are custom attributes used for LangChain-specific telemetry that
-extend the standard OpenTelemetry GenAI semantic conventions.
+This module defines semantic conventions following OpenTelemetry GenAI
+semantic conventions specification.
 """
 
 from __future__ import annotations
@@ -23,50 +23,56 @@ from __future__ import annotations
 from enum import Enum
 
 
-class TraceloopSpanKindValues(str, Enum):
-    """Values for the traceloop.span.kind attribute."""
+class GenAISpanKindValues(str, Enum):
+    """Values for gen_ai.operation.name attribute for LangChain operations.
 
+    These extend the standard GenAI operation types with LangChain-specific
+    operations for workflows, tasks, and agents.
+    """
+
+    CHAT = "chat"
+    TEXT_COMPLETION = "text_completion"
+    EMBEDDINGS = "embeddings"
+    # LangChain-specific operation types
     WORKFLOW = "workflow"
     TASK = "task"
-    TOOL = "tool"
+    TOOL = "execute_tool"
     AGENT = "agent"
+    CHAIN = "chain"
     UNKNOWN = "unknown"
 
 
 class LLMRequestTypeValues(str, Enum):
-    """Values for the llm.request_type attribute."""
+    """Values for the gen_ai.operation.name attribute."""
 
     CHAT = "chat"
-    COMPLETION = "completion"
-    EMBEDDING = "embedding"
+    COMPLETION = "text_completion"
+    EMBEDDING = "embeddings"
     RERANK = "rerank"
     UNKNOWN = "unknown"
 
 
 # Custom span attributes for LangChain instrumentation
 class SpanAttributes:
-    """Custom span attributes for LangChain instrumentation."""
+    """Span attributes for LangChain instrumentation.
 
-    # Traceloop span kind (workflow, task, tool, agent)
-    TRACELOOP_SPAN_KIND = "traceloop.span.kind"
+    Follows OpenTelemetry GenAI semantic conventions where applicable.
+    """
 
-    # Entity identification
-    TRACELOOP_ENTITY_NAME = "traceloop.entity.name"
-    TRACELOOP_ENTITY_PATH = "traceloop.entity.path"
-    TRACELOOP_WORKFLOW_NAME = "traceloop.workflow.name"
+    # LangChain-specific attributes (following gen_ai.* namespace)
+    LANGCHAIN_ENTITY_NAME = "gen_ai.langchain.entity.name"
+    LANGCHAIN_ENTITY_PATH = "gen_ai.langchain.entity.path"
+    LANGCHAIN_WORKFLOW_NAME = "gen_ai.langchain.workflow.name"
 
-    # Association properties prefix
-    TRACELOOP_ASSOCIATION_PROPERTIES = "traceloop.association.properties"
-
-    # LLM request type
-    LLM_REQUEST_TYPE = "llm.request_type"
+    # Association properties prefix (for metadata)
+    LANGCHAIN_METADATA = "gen_ai.langchain.metadata"
 
     # LLM request functions (for tool/function calling)
-    LLM_REQUEST_FUNCTIONS = "llm.request.functions"
+    LLM_REQUEST_FUNCTIONS = "gen_ai.request.tools"
 
-    # Token usage (legacy attributes)
-    LLM_USAGE_TOTAL_TOKENS = "llm.usage.total_tokens"
-    LLM_USAGE_CACHE_READ_INPUT_TOKENS = "llm.usage.cache_read_input_tokens"
+    # Token usage (additional attributes not in semconv yet)
+    LLM_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
+    LLM_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.input_tokens_details.cached"
 
 
 # Meter names for metrics
