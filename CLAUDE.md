@@ -60,7 +60,11 @@ CORE_REPO_SHA=<commit-hash> tox  # Test against specific commit
 
 ### Package Structure
 - `instrumentation/` - Main instrumentation packages (50+)
-- `instrumentation-genai/` - GenAI-specific instrumentations (OpenAI, Anthropic, VertexAI, etc.)
+- `instrumentation-genai/` - GenAI-specific instrumentations organized by category:
+  - `llm-clients/` - LLM provider clients (OpenAI, Anthropic, VertexAI, Bedrock, Cohere, Groq, etc.)
+  - `frameworks/` - AI frameworks (LangChain, LangGraph, CrewAI, Haystack, LlamaIndex, etc.)
+  - `vector-dbs/` - Vector databases (ChromaDB, Pinecone, Milvus, Qdrant, Weaviate, etc.)
+  - `protocols/` - Protocol instrumentations (MCP)
 - `opentelemetry-instrumentation/` - Base instrumentation framework with `BaseInstrumentor`
 - `exporter/` - Exporters (Prometheus remote-write, RichConsole)
 - `propagator/` - Context propagators (AWS X-Ray, OT Trace)
@@ -150,8 +154,12 @@ GenAI instrumentations in `instrumentation-genai/` MUST follow OpenTelemetry Gen
    - If porting from OpenLLMetry or similar, replace all such attributes
 
 3. **Environment variables** must use standard OTel naming:
-   - Content capture: `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (default: `false`)
+   - **Capture mode** (preferred): `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MODE` with values `metadata` or `all`
+   - **Per-package capture mode**: `OTEL_INSTRUMENTATION_{PACKAGE}_CAPTURE_MODE` (e.g., `OTEL_INSTRUMENTATION_OPENAI_CAPTURE_MODE`)
+   - **Legacy content capture**: `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (default: `false`)
    - NOT: `TRACELOOP_TRACE_CONTENT` or other vendor-specific names
+
+   **Resolution order**: Package-specific → Global → Legacy → Package default
 
 4. **Metric names** must follow `gen_ai.*` pattern:
    - `gen_ai.client.operation.duration`
@@ -162,9 +170,22 @@ GenAI instrumentations in `instrumentation-genai/` MUST follow OpenTelemetry Gen
    - Standard: `chat`, `text_completion`, `embeddings`
    - Extended: `workflow`, `task`, `execute_tool`, `agent`, `create_agent`
 
+### Capture Modes
+
+GenAI instrumentations support two capture modes:
+
+| Mode | Description | Tool Attributes |
+|------|-------------|-----------------|
+| `metadata` | Only metadata (token counts, model, finish reasons). Default for LLM clients. | `gen_ai.request.available_tools` (list of names) |
+| `all` | Everything including message content and log events. Default for frameworks. | Full details: `gen_ai.request.tools.{i}.name/description/parameters` |
+
+**Package defaults:**
+- LLM clients (openai, anthropic, etc.): `metadata`
+- Frameworks (langchain, langgraph, etc.): `all`
+
 ### Reference Implementation
 
-See `opentelemetry-instrumentation-openai-v2` for the canonical example of proper semantic convention usage.
+See `opentelemetry-instrumentation-openai-v2` in `instrumentation-genai/llm-clients/` for the canonical example of proper semantic convention usage.
 
 ## Vector Database Instrumentation Standards
 
@@ -202,7 +223,7 @@ Vector database instrumentations in `instrumentation-genai/` follow specific pat
 ### Vector DB Package Structure
 
 ```
-instrumentation-genai/opentelemetry-instrumentation-{name}/
+instrumentation-genai/vector-dbs/opentelemetry-instrumentation-{name}/
 ├── src/opentelemetry/instrumentation/{name}/
 │   ├── __init__.py      # Main Instrumentor class (extends BaseInstrumentor)
 │   ├── version.py       # Version "2.0b0.dev"
@@ -319,7 +340,7 @@ When porting from OpenLLMetry, use these conversions:
 ### Standard Package Structure for Agent Frameworks
 
 ```
-instrumentation-genai/opentelemetry-instrumentation-{framework}/
+instrumentation-genai/frameworks/opentelemetry-instrumentation-{framework}/
 ├── src/opentelemetry/instrumentation/{framework}/
 │   ├── __init__.py      # Main {Framework}Instrumentor class
 │   ├── version.py       # __version__ = "0.1b0"
