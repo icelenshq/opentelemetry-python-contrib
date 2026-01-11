@@ -40,12 +40,27 @@ instr_dirs = [
     if isdir(join(instr, f))
 ]
 
-instr_genai = "../instrumentation-genai"
-instr_genai_dirs = [
-    os.path.abspath("/".join(["../instrumentation-genai", f, "src"]))
-    for f in listdir(instr_genai)
-    if isdir(join(instr_genai, f))
-]
+# AI instrumentation directories
+instr_ai_llm = "../instrumentation-ai/llm-providers"
+instr_ai_frameworks = "../instrumentation-ai/frameworks"
+instr_ai_vectordb = "../instrumentation-ai/vectordb"
+instr_ai_agents = "../instrumentation-ai/agents"
+
+instr_ai_dirs = []
+for ai_dir in [
+    instr_ai_llm,
+    instr_ai_frameworks,
+    instr_ai_vectordb,
+    instr_ai_agents,
+]:
+    if isdir(ai_dir):
+        instr_ai_dirs.extend(
+            [
+                os.path.abspath("/".join([ai_dir, f, "src"]))
+                for f in listdir(ai_dir)
+                if isdir(join(ai_dir, f))
+            ]
+        )
 
 prop = "../propagator"
 prop_dirs = [
@@ -76,7 +91,7 @@ util_dirs = [
 sys.path[:0] = (
     exp_dirs
     + instr_dirs
-    + instr_genai_dirs
+    + instr_ai_dirs
     + sdk_ext_dirs
     + prop_dirs
     + resource_dirs

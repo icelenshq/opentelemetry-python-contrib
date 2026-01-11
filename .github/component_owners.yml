@@ -25,7 +25,7 @@ components:
   instrumentation/opentelemetry-instrumentation-urllib3:
     - shalevr
 
-  instrumentation-genai/:
+  instrumentation-ai/:
     - karthikscale3
     - lmolkova
     - lzchen
@@ -48,12 +48,12 @@ components:
     - DylanRussell
     - keith-decker
 
-  instrumentation-genai/opentelemetry-instrumentation-langchain:
+  instrumentation-ai/frameworks/opentelemetry-instrumentation-langchain:
     - zhirafovod
     - wrisa
 
-  instrumentation-genai/opentelemetry-instrumentation-openai-agents-v2:
+  instrumentation-ai/agents/opentelemetry-instrumentation-openai-agents-v2:
     - nagkumar91
 
-  instrumentation-genai/opentelemetry-instrumentation-anthropic:
+  instrumentation-ai/llm-providers/opentelemetry-instrumentation-anthropic:
     - vasantteja

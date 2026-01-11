@@ -50,7 +50,7 @@ instruments = ["google-genai >= 1.32.0"]
 google-genai = "opentelemetry.instrumentation.google_genai:GoogleGenAiSdkInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/instrumentation-genai/opentelemetry-instrumentation-google-genai"
+Homepage = "https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/instrumentation-ai/llm-providers/opentelemetry-instrumentation-google-genai"
 Repository = "https://github.com/open-telemetry/opentelemetry-python-contrib"
 
 [tool.hatch.version]

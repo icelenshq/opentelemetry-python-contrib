@@ -23,7 +23,13 @@ import tomli
 scripts_path = os.path.dirname(os.path.abspath(__file__))
 root_path = os.path.dirname(scripts_path)
 instrumentations_path = os.path.join(root_path, "instrumentation")
-genai_instrumentations_path = os.path.join(root_path, "instrumentation-genai")
+# AI instrumentation paths organized by category
+ai_instrumentation_paths = [
+    os.path.join(root_path, "instrumentation-ai", "llm-providers"),
+    os.path.join(root_path, "instrumentation-ai", "frameworks"),
+    os.path.join(root_path, "instrumentation-ai", "vectordb"),
+    os.path.join(root_path, "instrumentation-ai", "agents"),
+]
 
 
 def get_instrumentation_packages(
@@ -36,11 +42,14 @@ def get_instrumentation_packages(
         if not os.path.isdir(pkg_path):
             continue
         pkg_paths.append(pkg_path)
-    for pkg in os.listdir(genai_instrumentations_path):
-        pkg_path = os.path.join(genai_instrumentations_path, pkg)
-        if not os.path.isdir(pkg_path):
-            continue
-        pkg_paths.append(pkg_path)
+    # Add AI instrumentation packages from all category directories
+    for ai_path in ai_instrumentation_paths:
+        if os.path.isdir(ai_path):
+            for pkg in os.listdir(ai_path):
+                pkg_path = os.path.join(ai_path, pkg)
+                if not os.path.isdir(pkg_path):
+                    continue
+                pkg_paths.append(pkg_path)
 
     for pkg_path in sorted(pkg_paths):
         try:
