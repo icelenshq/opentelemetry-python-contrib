@@ -7,7 +7,7 @@ This project uses [Beads (bd)](https://github.com/steveyegge/beads) for issue tr
 - Track ALL work in bd (never use markdown TODOs or comment-based task lists)
 - Use `bd ready` to find available work
 - Use `bd create` to track new issues/tasks/bugs
-- Use `bd sync` at end of session to sync with git remote
+- Use `bd sync` at end of session to sync with git remote.
 - Git hooks auto-sync on commit/merge
 
 ## Quick Reference
